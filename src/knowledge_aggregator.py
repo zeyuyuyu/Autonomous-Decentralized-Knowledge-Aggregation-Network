@@ -1,93 +1,85 @@
 import hashlib
-from typing import Dict, List, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
 @dataclass
 class KnowledgeNode:
-    content: Any
+    content: str
     timestamp: datetime
     source: str
-    confidence: float
-    hash: str = ''
-
-    def __post_init__(self):
-        self.hash = self.calculate_hash()
-
-    def calculate_hash(self) -> str:
-        content_str = str(self.content) + str(self.timestamp) + self.source + str(self.confidence)
-        return hashlib.sha256(content_str.encode()).hexdigest()
+    trust_score: float
+    verification_count: int
+    hash: str
 
 class KnowledgeAggregator:
     def __init__(self):
-        self.knowledge_pool: Dict[str, List[KnowledgeNode]] = {}
+        self.knowledge_graph: Dict[str, KnowledgeNode] = {}
+        self.trust_scores: Dict[str, float] = {}
         self.consensus_threshold = 0.75
-
-    def add_knowledge(self, content: Any, source: str, confidence: float) -> str:
-        """Add a new piece of knowledge to the network"""
+    
+    def add_knowledge(self, content: str, source: str) -> str:
+        """Add new knowledge to the network with initial trust scoring"""
+        timestamp = datetime.now()
+        node_hash = self._generate_hash(content, source, timestamp)
+        
+        trust_score = self.trust_scores.get(source, 0.5)
+        
         node = KnowledgeNode(
             content=content,
-            timestamp=datetime.now(),
+            timestamp=timestamp,
             source=source,
-            confidence=confidence
+            trust_score=trust_score,
+            verification_count=1,
+            hash=node_hash
         )
         
-        if node.hash not in self.knowledge_pool:
-            self.knowledge_pool[node.hash] = []
-        self.knowledge_pool[node.hash].append(node)
-        return node.hash
-
-    def get_consensus_knowledge(self, hash_id: str) -> Dict[str, Any]:
-        """Retrieve knowledge with consensus validation"""
-        if hash_id not in self.knowledge_pool:
-            return {'error': 'Knowledge not found'}
-
-        nodes = self.knowledge_pool[hash_id]
-        total_confidence = sum(node.confidence for node in nodes)
-        avg_confidence = total_confidence / len(nodes)
-
-        if avg_confidence >= self.consensus_threshold:
-            return {
-                'content': nodes[0].content,
-                'sources': [node.source for node in nodes],
-                'confidence': avg_confidence,
-                'consensus': True,
-                'timestamp': max(node.timestamp for node in nodes)
-            }
-        return {
-            'error': 'Consensus threshold not met',
-            'current_confidence': avg_confidence
-        }
-
-    def validate_knowledge(self, hash_id: str, source: str, confidence: float) -> bool:
-        """Validate existing knowledge by adding confirmation"""
-        if hash_id not in self.knowledge_pool:
+        self.knowledge_graph[node_hash] = node
+        return node_hash
+    
+    def verify_knowledge(self, node_hash: str, verifier: str) -> bool:
+        """Verify existing knowledge and update trust scores"""
+        if node_hash not in self.knowledge_graph:
             return False
             
-        existing_node = self.knowledge_pool[hash_id][0]
-        new_node = KnowledgeNode(
-            content=existing_node.content,
-            timestamp=datetime.now(),
-            source=source,
-            confidence=confidence
-        )
+        node = self.knowledge_graph[node_hash]
+        verifier_trust = self.trust_scores.get(verifier, 0.5)
         
-        if new_node.hash == hash_id:
-            self.knowledge_pool[hash_id].append(new_node)
-            return True
-        return False
-
-    def get_network_stats(self) -> Dict[str, Any]:
-        """Get statistics about the knowledge network"""
-        total_nodes = sum(len(nodes) for nodes in self.knowledge_pool.values())
-        consensus_count = sum(
-            1 for hash_id in self.knowledge_pool
-            if self.get_consensus_knowledge(hash_id).get('consensus', False)
-        )
+        # Update node verification metrics
+        node.verification_count += 1
+        node.trust_score = self._calculate_weighted_trust(node, verifier_trust)
         
-        return {
-            'total_knowledge_pieces': len(self.knowledge_pool),
-            'total_nodes': total_nodes,
-            'consensus_reached': consensus_count,
-            'average_sources_per_knowledge': total_nodes / len(self.knowledge_pool) if self.knowledge_pool else 0
-        }
+        # Update source trust scores
+        if node.trust_score > self.consensus_threshold:
+            self._update_trust_score(node.source, 0.1)
+            self._update_trust_score(verifier, 0.05)
+        
+        return True
+    
+    def get_verified_knowledge(self, min_trust: float = 0.7) -> List[KnowledgeNode]:
+        """Retrieve knowledge that meets minimum trust threshold"""
+        return [
+            node for node in self.knowledge_graph.values()
+            if node.trust_score >= min_trust
+        ]
+    
+    def _generate_hash(self, content: str, source: str, timestamp: datetime) -> str:
+        """Generate unique hash for knowledge node"""
+        hash_input = f"{content}{source}{timestamp.isoformat()}"
+        return hashlib.sha256(hash_input.encode()).hexdigest()
+    
+    def _calculate_weighted_trust(self, node: KnowledgeNode, verifier_trust: float) -> float:
+        """Calculate weighted trust score based on verifications"""
+        base_trust = node.trust_score * node.verification_count
+        new_trust = base_trust + verifier_trust
+        return new_trust / (node.verification_count + 1)
+    
+    def _update_trust_score(self, source: str, delta: float):
+        """Update trust score for a source"""
+        current_trust = self.trust_scores.get(source, 0.5)
+        new_trust = min(1.0, max(0.0, current_trust + delta))
+        self.trust_scores[source] = new_trust
+    
+    def get_source_trust(self, source: str) -> float:
+        """Get trust score for a specific source"""
+        return self.trust_scores.get(source, 0.5)
