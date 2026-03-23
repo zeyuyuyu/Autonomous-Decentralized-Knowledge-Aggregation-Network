@@ -1,59 +1,75 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-class FederatedLearningAggregator(nn.Module):
-    def __init__(self, model, clients, learning_rate=0.001):
-        super(FederatedLearningAggregator, self).__init__()
-        self.model = model
-        self.clients = clients
-        self.learning_rate = learning_rate
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+class FederatedLearningModel(nn.Module):
+    def __init__(self):
+        super(FederatedLearningModel, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, 3, 1)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.dropout1 = nn.Dropout(0.25)
+        self.dropout2 = nn.Dropout(0.5)
+        self.fc1 = nn.Linear(9216, 128)
+        self.fc2 = nn.Linear(128, 10)
 
-    def train(self, num_rounds):
-        for round in range(num_rounds):
-            client_models = []
-            for client in self.clients:
-                client_model = client.train(self.model)
-                client_models.append(client_model)
+    def forward(self, x):
+        x = self.conv1(x)
+        x = nn.functional.relu(x)
+        x = self.conv2(x)
+        x = nn.functional.relu(x)
+        x = nn.functional.max_pool2d(x, 2)
+        x = self.dropout1(x)
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = nn.functional.relu(x)
+        x = self.dropout2(x)
+        x = self.fc2(x)
+        output = nn.functional.log_softmax(x, dim=1)
+        return output
 
-            aggregated_model = self.aggregate_models(client_models)
-            self.model.load_state_dict(aggregated_model.state_dict())
-            self.optimizer.step()
+def train_model(model, train_loader, test_loader, epochs, lr):
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.NLLLoss()
 
-    def aggregate_models(self, client_models):
-        aggregated_model = copy.deepcopy(client_models[0])
-        for param in aggregated_model.parameters():
-            param.data = torch.zeros_like(param.data)
+    for epoch in range(epochs):
+        model.train()
+        for data, target in train_loader:
+            optimizer.zero_grad()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
 
-        for client_model in client_models:
-            for param, agg_param in zip(client_model.parameters(), aggregated_model.parameters()):
-                agg_param.data += param.data / len(client_models)
+        model.eval()
+        test_loss = 0
+        correct = 0
+        with torch.no_grad():
+            for data, target in test_loader:
+                output = model(data)
+                test_loss += criterion(output, target).item()
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
 
-        return aggregated_model
+        test_loss /= len(test_loader.dataset)
+        print(f'Epoch [{epoch+1}/{epochs}], Test Loss: {test_loss:.4f}, Test Accuracy: {correct}/{len(test_loader.dataset)} ({100. * correct / len(test_loader.dataset):.2f}%)')
 
-class FederatedLearningClient(nn.Module):
-    def __init__(self, model, dataset, batch_size, learning_rate=0.001):
-        super(FederatedLearningClient, self).__init__()
-        self.model = copy.deepcopy(model)
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+    return model
 
-    def train(self, global_model):
-        self.model.load_state_dict(global_model.state_dict())
-        dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+if __name__ == '__main__':
+    # Load MNIST dataset
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST(root='./data', train=False, transform=transform)
 
-        for epoch in range(5):
-            for data, target in dataloader:
-                self.optimizer.zero_grad()
-                output = self.model(data)
-                loss = nn.functional.cross_entropy(output, target)
-                loss.backward()
-                self.optimizer.step()
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
 
-        return self.model
+    # Train the federated learning model
+    model = FederatedLearningModel()
+    trained_model = train_model(model, train_loader, test_loader, epochs=10, lr=0.001)
