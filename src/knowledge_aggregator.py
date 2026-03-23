@@ -1,81 +1,73 @@
-import numpy as np
-from typing import List, Dict, Tuple
+import hashlib
+import json
+import time
+from typing import Dict, List
 
-class KnowledgeAggregator:
+class KnowledgeBlock:
+    def __init__(self, data: Dict, timestamp: float, prev_hash: str):
+        self.data = data
+        self.timestamp = timestamp
+        self.prev_hash = prev_hash
+        self.hash = self.calculate_hash()
+
+    def calculate_hash(self) -> str:
+        block_string = json.dumps(self.data, sort_keys=True).encode()
+        return hashlib.sha256(block_string).hexdigest()
+
+class KnowledgeChain:
     def __init__(self):
-        self.knowledge_sources = {}
-        self.source_weights = {}
-        self.confidence_threshold = 0.75
+        self.chain: List[KnowledgeBlock] = []
+        self.add_genesis_block()
 
-    def add_knowledge_source(self, source_id: str, reliability_score: float = 1.0):
-        """Add a new knowledge source with an optional reliability score"""
-        self.knowledge_sources[source_id] = []
-        self.source_weights[source_id] = reliability_score
+    def add_genesis_block(self):
+        genesis_block = KnowledgeBlock({
+            'index': 0,
+            'data': 'Genesis Block'
+        }, time.time(), '0')
+        self.chain.append(genesis_block)
 
-    def submit_knowledge(self, source_id: str, knowledge: Dict, confidence: float):
-        """Submit a piece of knowledge with associated confidence score"""
-        if source_id not in self.knowledge_sources:
-            raise ValueError(f'Unknown knowledge source: {source_id}')
-        
-        self.knowledge_sources[source_id].append({
-            'content': knowledge,
-            'confidence': confidence,
-            'timestamp': np.datetime64('now')
-        })
+    def add_block(self, data: Dict) -> KnowledgeBlock:
+        prev_block = self.chain[-1]
+        new_block = KnowledgeBlock(data, time.time(), prev_block.hash)
+        self.chain.append(new_block)
+        return new_block
 
-    def aggregate_knowledge(self) -> List[Tuple[Dict, float]]:
-        """Aggregate knowledge across sources using weighted consensus"""
-        all_knowledge = []
-        
-        # Collect all knowledge pieces with their weighted confidence scores
-        for source_id, submissions in self.knowledge_sources.items():
-            source_weight = self.source_weights[source_id]
-            
-            for submission in submissions:
-                weighted_confidence = submission['confidence'] * source_weight
-                all_knowledge.append({
-                    'content': submission['content'],
-                    'weighted_confidence': weighted_confidence,
-                    'timestamp': submission['timestamp']
-                })
+    def is_chain_valid(self) -> bool:
+        for i in range(1, len(self.chain)):
+            current_block = self.chain[i]
+            prev_block = self.chain[i - 1]
 
-        # Group similar knowledge and combine confidence scores
-        aggregated = {}
-        for item in all_knowledge:
-            key = str(item['content'])  # Use content as key for grouping
-            if key not in aggregated:
-                aggregated[key] = {
-                    'content': item['content'],
-                    'confidence_sum': item['weighted_confidence'],
-                    'count': 1,
-                    'latest_timestamp': item['timestamp']
-                }
-            else:
-                aggregated[key]['confidence_sum'] += item['weighted_confidence']
-                aggregated[key]['count'] += 1
-                aggregated[key]['latest_timestamp'] = max(
-                    aggregated[key]['latest_timestamp'],
-                    item['timestamp']
-                )
+            if current_block.hash != current_block.calculate_hash():
+                return False
 
-        # Calculate final confidence scores and filter results
-        results = []
-        for item in aggregated.values():
-            final_confidence = item['confidence_sum'] / item['count']
-            if final_confidence >= self.confidence_threshold:
-                results.append((item['content'], final_confidence))
+            if current_block.prev_hash != prev_block.hash:
+                return False
 
-        # Sort by confidence score descending
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results
+        return True
 
-    def get_top_knowledge(self, n: int = 10) -> List[Tuple[Dict, float]]:
-        """Get top N knowledge items by confidence score"""
-        aggregated = self.aggregate_knowledge()
-        return aggregated[:n]
+class KnowledgeConsensus:
+    def __init__(self, peers: List[str]):
+        self.chain = KnowledgeChain()
+        self.peers = peers
 
-    def set_confidence_threshold(self, threshold: float):
-        """Set minimum confidence threshold for including knowledge in results"""
-        if not 0 <= threshold <= 1:
-            raise ValueError('Confidence threshold must be between 0 and 1')
-        self.confidence_threshold = threshold
+    def broadcast_block(self, block: KnowledgeBlock):
+        for peer in self.peers:
+            # Simulate broadcasting the block to peers
+            print(f'Broadcasting block to {peer}')
+
+    def reach_consensus(self) -> bool:
+        majority_chain = self.chain
+        for peer in self.peers:
+            # Simulate retrieving the chain from a peer
+            peer_chain = self.retrieve_chain_from_peer(peer)
+            if len(peer_chain.chain) > len(majority_chain.chain) and peer_chain.is_chain_valid():
+                majority_chain = peer_chain
+
+        if majority_chain != self.chain:
+            self.chain = majority_chain
+            return True
+        return False
+
+    def retrieve_chain_from_peer(self, peer: str) -> KnowledgeChain:
+        # Simulate retrieving the chain from a peer
+        return KnowledgeChain()
