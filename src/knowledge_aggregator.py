@@ -1,52 +1,59 @@
-import os
-import json
-from typing import List, Dict
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
-class KnowledgeAggregator:
-    def __init__(self, data_dir: str):
-        self.data_dir = data_dir
-        self.knowledge_base: Dict[str, Dict] = {}
-        self.load_knowledge_base()
+class FederatedLearningAggregator(nn.Module):
+    def __init__(self, model, clients, learning_rate=0.001):
+        super(FederatedLearningAggregator, self).__init__()
+        self.model = model
+        self.clients = clients
+        self.learning_rate = learning_rate
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
-    def load_knowledge_base(self):
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith('.json'):
-                with open(os.path.join(self.data_dir, filename), 'r') as f:
-                    data = json.load(f)
-                    self.knowledge_base.update(data)
+    def train(self, num_rounds):
+        for round in range(num_rounds):
+            client_models = []
+            for client in self.clients:
+                client_model = client.train(self.model)
+                client_models.append(client_model)
 
-    def query_knowledge_base(self, query: str) -> List[Dict]:
-        results = []
-        for _, item in self.knowledge_base.items():
-            if query.lower() in item['content'].lower():
-                results.append(item)
-        return results
+            aggregated_model = self.aggregate_models(client_models)
+            self.model.load_state_dict(aggregated_model.state_dict())
+            self.optimizer.step()
 
-    def synthesize_knowledge(self, queries: List[str]) -> Dict[str, float]:
-        synthesis = {}
-        for query in queries:
-            results = self.query_knowledge_base(query)
-            if results:
-                synthesis[query] = self._compute_relevance(results)
-        return synthesis
+    def aggregate_models(self, client_models):
+        aggregated_model = copy.deepcopy(client_models[0])
+        for param in aggregated_model.parameters():
+            param.data = torch.zeros_like(param.data)
 
-    def _compute_relevance(self, results: List[Dict]) -> float:
-        relevance = 0
-        for result in results:
-            relevance += len(result['content'].split()) / len(result['title'].split())
-        return relevance / len(results)
+        for client_model in client_models:
+            for param, agg_param in zip(client_model.parameters(), aggregated_model.parameters()):
+                agg_param.data += param.data / len(client_models)
 
-    def reason_about_knowledge(self, synthesis: Dict[str, float]) -> Dict[str, float]:
-        reasoning = {}
-        for query, relevance in synthesis.items():
-            reasoning[query] = self._infer_reasoning(query, relevance)
-        return reasoning
+        return aggregated_model
 
-    def _infer_reasoning(self, query: str, relevance: float) -> float:
-        # Implement logic to infer reasoning based on query and relevance
-        if relevance > 0.8:
-            return 0.9
-        elif relevance > 0.5:
-            return 0.7
-        else:
-            return 0.4
+class FederatedLearningClient(nn.Module):
+    def __init__(self, model, dataset, batch_size, learning_rate=0.001):
+        super(FederatedLearningClient, self).__init__()
+        self.model = copy.deepcopy(model)
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+
+    def train(self, global_model):
+        self.model.load_state_dict(global_model.state_dict())
+        dataloader = DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True)
+
+        for epoch in range(5):
+            for data, target in dataloader:
+                self.optimizer.zero_grad()
+                output = self.model(data)
+                loss = nn.functional.cross_entropy(output, target)
+                loss.backward()
+                self.optimizer.step()
+
+        return self.model
