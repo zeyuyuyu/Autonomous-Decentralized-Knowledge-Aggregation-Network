@@ -1,106 +1,52 @@
-import hashlib
-from typing import Dict, List, Set
-from dataclasses import dataclass
-from datetime import datetime
-
-@dataclass
-class Knowledge:
-    content: str
-    source: str
-    timestamp: datetime
-    confidence: float
-    verification_count: int
-
-@dataclass 
-class PeerNode:
-    id: str
-    reputation: float
-    contribution_count: int
-    last_active: datetime
+import os
+import json
+from typing import List, Dict
 
 class KnowledgeAggregator:
-    def __init__(self):
-        self.knowledge_base: Dict[str, Knowledge] = {}
-        self.peers: Dict[str, PeerNode] = {}
-        self.consensus_threshold = 0.75
-        
-    def add_knowledge(self, content: str, source: str) -> str:
-        """Add new knowledge entry with initial confidence score"""
-        knowledge_id = hashlib.sha256(content.encode()).hexdigest()
-        
-        if knowledge_id not in self.knowledge_base:
-            self.knowledge_base[knowledge_id] = Knowledge(
-                content=content,
-                source=source,
-                timestamp=datetime.now(),
-                confidence=0.1,
-                verification_count=1
-            )
-            
-            if source not in self.peers:
-                self.peers[source] = PeerNode(
-                    id=source,
-                    reputation=0.5,
-                    contribution_count=1,
-                    last_active=datetime.now()
-                )
-            else:
-                self.peers[source].contribution_count += 1
-                self.peers[source].last_active = datetime.now()
-                
-        return knowledge_id
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+        self.knowledge_base: Dict[str, Dict] = {}
+        self.load_knowledge_base()
 
-    def verify_knowledge(self, knowledge_id: str, verifier: str) -> float:
-        """Verify knowledge and update confidence based on verifier reputation"""
-        if knowledge_id not in self.knowledge_base:
-            raise ValueError("Knowledge ID not found")
-            
-        knowledge = self.knowledge_base[knowledge_id]
-        verifier_rep = self.peers.get(verifier, PeerNode(verifier, 0.5, 0, datetime.now())).reputation
-        
-        # Update confidence score using weighted average
-        old_confidence = knowledge.confidence
-        knowledge.verification_count += 1
-        knowledge.confidence = (old_confidence + verifier_rep) / knowledge.verification_count
-        
-        # Update peer reputations
-        if knowledge.confidence >= self.consensus_threshold:
-            self._update_reputations(knowledge_id)
-            
-        return knowledge.confidence
+    def load_knowledge_base(self):
+        for filename in os.listdir(self.data_dir):
+            if filename.endswith('.json'):
+                with open(os.path.join(self.data_dir, filename), 'r') as f:
+                    data = json.load(f)
+                    self.knowledge_base.update(data)
 
-    def _update_reputations(self, knowledge_id: str) -> None:
-        """Update peer reputations based on consensus achievement"""
-        knowledge = self.knowledge_base[knowledge_id]
-        
-        # Reward original contributor
-        contributor = self.peers[knowledge.source]
-        contributor.reputation = min(1.0, contributor.reputation + 0.1)
-        
-        # Update all peer reputations based on their verification alignment
-        for peer in self.peers.values():
-            if peer.last_active > knowledge.timestamp:
-                alignment_factor = 0.05 * (1 if knowledge.confidence >= self.consensus_threshold else -1)
-                peer.reputation = max(0.1, min(1.0, peer.reputation + alignment_factor))
+    def query_knowledge_base(self, query: str) -> List[Dict]:
+        results = []
+        for _, item in self.knowledge_base.items():
+            if query.lower() in item['content'].lower():
+                results.append(item)
+        return results
 
-    def get_verified_knowledge(self, min_confidence: float = 0.75) -> List[Knowledge]:
-        """Get all knowledge entries above confidence threshold"""
-        return [k for k in self.knowledge_base.values() if k.confidence >= min_confidence]
+    def synthesize_knowledge(self, queries: List[str]) -> Dict[str, float]:
+        synthesis = {}
+        for query in queries:
+            results = self.query_knowledge_base(query)
+            if results:
+                synthesis[query] = self._compute_relevance(results)
+        return synthesis
 
-    def get_peer_rankings(self) -> List[PeerNode]:
-        """Get peers sorted by reputation"""
-        return sorted(
-            self.peers.values(),
-            key=lambda x: (x.reputation, x.contribution_count),
-            reverse=True
-        )
+    def _compute_relevance(self, results: List[Dict]) -> float:
+        relevance = 0
+        for result in results:
+            relevance += len(result['content'].split()) / len(result['title'].split())
+        return relevance / len(results)
 
-    def prune_inactive_peers(self, max_inactive_days: int = 30) -> None:
-        """Remove peers inactive beyond threshold"""
-        cutoff = datetime.now()
-        inactive = [
-            pid for pid, peer in self.peers.items()
-            if (cutoff - peer.last_active).days > max_inactive_days
-        ]
-        for pid in inactive:
-            del self.peers[pid]
+    def reason_about_knowledge(self, synthesis: Dict[str, float]) -> Dict[str, float]:
+        reasoning = {}
+        for query, relevance in synthesis.items():
+            reasoning[query] = self._infer_reasoning(query, relevance)
+        return reasoning
+
+    def _infer_reasoning(self, query: str, relevance: float) -> float:
+        # Implement logic to infer reasoning based on query and relevance
+        if relevance > 0.8:
+            return 0.9
+        elif relevance > 0.5:
+            return 0.7
+        else:
+            return 0.4
