@@ -1,97 +1,82 @@
 import hashlib
-from typing import Dict, List, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 import json
 
 @dataclass
 class KnowledgeNode:
-    content: str
-    timestamp: datetime
-    source: str
-    hash: str
-    validators: List[str]
-    confidence: float
+    id: str
+    data: Any
+    timestamp: float
+    signatures: List[str] = None
+    references: List[str] = None
 
 class KnowledgeAggregator:
-    def __init__(self):
-        self.knowledge_graph: Dict[str, KnowledgeNode] = {}
-        self.peer_network: List[str] = []
-        self.validation_threshold = 0.75
+    def __init__(self, node_id: str, min_consensus: float = 0.67):
+        self.node_id = node_id
+        self.knowledge_pool = {}
+        self.pending_validations = {}
+        self.validated_knowledge = {}
+        self.min_consensus = min_consensus
+        self.peers = set()
     
     def add_peer(self, peer_id: str) -> None:
-        if peer_id not in self.peer_network:
-            self.peer_network.append(peer_id)
+        self.peers.add(peer_id)
     
-    def remove_peer(self, peer_id: str) -> None:
-        if peer_id in self.peer_network:
-            self.peer_network.remove(peer_id)
-    
-    def submit_knowledge(self, content: str, source: str) -> str:
-        timestamp = datetime.now()
-        node_hash = self._generate_hash(content, timestamp, source)
-        
+    def submit_knowledge(self, data: Any, references: List[str] = None) -> str:
+        """Submit new knowledge to the network for validation"""
         node = KnowledgeNode(
-            content=content,
-            timestamp=timestamp,
-            source=source,
-            hash=node_hash,
-            validators=[],
-            confidence=0.0
+            id=self._generate_id(data),
+            data=data,
+            timestamp=datetime.now().timestamp(),
+            signatures=[self.node_id],
+            references=references or []
         )
-        
-        self.knowledge_graph[node_hash] = node
-        return node_hash
+        self.pending_validations[node.id] = node
+        return node.id
     
-    def validate_node(self, node_hash: str, validator_id: str) -> bool:
-        if node_hash not in self.knowledge_graph:
+    def validate_knowledge(self, node_id: str, peer_signature: str) -> bool:
+        """Validate knowledge and track consensus"""
+        if node_id not in self.pending_validations:
             return False
             
-        node = self.knowledge_graph[node_hash]
-        if validator_id not in node.validators:
-            node.validators.append(validator_id)
-            node.confidence = len(node.validators) / len(self.peer_network)
-            
-        return True
-    
-    def get_consensus_knowledge(self) -> List[KnowledgeNode]:
-        return [
-            node for node in self.knowledge_graph.values()
-            if node.confidence >= self.validation_threshold
-        ]
-    
-    def _generate_hash(self, content: str, timestamp: datetime, source: str) -> str:
-        hash_input = f"{content}{timestamp.isoformat()}{source}"
-        return hashlib.sha256(hash_input.encode()).hexdigest()
-    
-    def export_knowledge(self, filepath: str) -> None:
-        consensus_nodes = self.get_consensus_knowledge()
-        export_data = [
-            {
-                "content": node.content,
-                "timestamp": node.timestamp.isoformat(),
-                "source": node.source,
-                "hash": node.hash,
-                "validators": node.validators,
-                "confidence": node.confidence
-            }
-            for node in consensus_nodes
-        ]
+        node = self.pending_validations[node_id]
+        if peer_signature not in node.signatures:
+            node.signatures.append(peer_signature)
         
-        with open(filepath, 'w') as f:
-            json.dump(export_data, f, indent=2)
+        # Check if consensus reached
+        if len(node.signatures) >= len(self.peers) * self.min_consensus:
+            self.validated_knowledge[node_id] = node
+            del self.pending_validations[node_id]
+            return True
+        return False
     
-    def import_knowledge(self, filepath: str) -> None:
-        with open(filepath, 'r') as f:
-            import_data = json.load(f)
+    def get_knowledge(self, node_id: str) -> KnowledgeNode:
+        """Retrieve validated knowledge by ID"""
+        return self.validated_knowledge.get(node_id)
+    
+    def get_all_validated_knowledge(self) -> Dict[str, KnowledgeNode]:
+        """Get all knowledge that reached consensus"""
+        return self.validated_knowledge
+    
+    def _generate_id(self, data: Any) -> str:
+        """Generate deterministic ID for knowledge node"""
+        data_str = json.dumps(data, sort_keys=True)
+        return hashlib.sha256(data_str.encode()).hexdigest()
+    
+    def verify_references(self, references: List[str]) -> bool:
+        """Verify that all referenced knowledge exists and is validated"""
+        return all(ref in self.validated_knowledge for ref in references)
+
+    def get_knowledge_chain(self, node_id: str) -> List[KnowledgeNode]:
+        """Get the chain of referenced knowledge nodes"""
+        chain = []
+        current = self.get_knowledge(node_id)
+        
+        while current and current.references:
+            chain.append(current)
+            # Follow first reference (can be extended to handle multiple paths)
+            current = self.get_knowledge(current.references[0]) if current.references else None
             
-        for node_data in import_data:
-            node = KnowledgeNode(
-                content=node_data["content"],
-                timestamp=datetime.fromisoformat(node_data["timestamp"]),
-                source=node_data["source"],
-                hash=node_data["hash"],
-                validators=node_data["validators"],
-                confidence=node_data["confidence"]
-            )
-            self.knowledge_graph[node.hash] = node
+        return chain
